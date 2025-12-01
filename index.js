@@ -8,26 +8,36 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 8080;
 
+app.use(cors());
+app.use(express.json());
+
 // ====== CONFIG ======
 const SHEET_ID =
   process.env.SHEET_ID ||
-  "1aXx2vuHjQ3uAfvt1zy9CzviygKBbenKHIp_d76GkhTA"; // your sheet ID
+  "1aXx2vuHjQ3uAfvt1zy9CzviygKBbenKHIp_d76GkhTA";
+
+// IMPORTANT: set this in Render env exactly to the JSON contents of the key file
 const GOOGLE_SERVICE_KEY = process.env.GOOGLE_SERVICE_KEY;
 
-// change this to EXACT tab name in your sheet (e.g. "Sheet1", "Bookings", etc.)
-const SHEET_NAME = process.env.SHEET_NAME || "Sheet1";
+// your tab name; override via SHEET_NAME env if needed
+const SHEET_NAME = process.env.SHEET_NAME || "BANK MIS";
 
-if (!GOOGLE_SERVICE_KEY) {
-  console.warn("⚠️ GOOGLE_SERVICE_KEY is not set. Make sure it's in your .env");
+if (!SHEET_ID) {
+  console.warn("⚠️ SHEET_ID is not set.");
 }
 
-// column names in your Google Sheet (header row)
+if (!GOOGLE_SERVICE_KEY) {
+  console.warn("⚠️ GOOGLE_SERVICE_KEY is not set. Google Sheets will NOT work.");
+}
+
+// column names in your Google Sheet (header row on row 2)
 const COLS = {
   CLUSTER: "Cluster",
   SL_NO: "Sl No.",
   BOOKING_DATE: "Booking Date",
   UNIT_NO: "Unit No.",
-  SOLD_STATUS: "SOLD/UNSOLD",
+  // adjust this string to exactly match your header (it looks like `SOLD/UNSO` in the screenshot)
+  SOLD_STATUS: "SOLD/UNSO",
   MODEL: "Model",
   UNIT_TYPE: "Unit Type",
   SBA: "SBA",
@@ -83,10 +93,26 @@ const COLS = {
 // ====== HELPERS ======
 
 const getSheets = async () => {
+  if (!GOOGLE_SERVICE_KEY) {
+    throw new Error("GOOGLE_SERVICE_KEY env var is missing");
+  }
+
+  let credentials;
+  try {
+    credentials = JSON.parse(GOOGLE_SERVICE_KEY);
+  } catch (err) {
+    console.error("❌ Failed to parse GOOGLE_SERVICE_KEY as JSON:", err.message);
+    console.error(
+      "Make sure you pasted the FULL JSON key from Google Cloud into the env var, without extra quotes."
+    );
+    throw err;
+  }
+
   const auth = new google.auth.GoogleAuth({
-    credentials: JSON.parse(GOOGLE_SERVICE_KEY),
+    credentials,
     scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"]
   });
+
   return google.sheets({ version: "v4", auth });
 };
 
@@ -94,7 +120,8 @@ const getRows = async () => {
   const sheets = await getSheets();
   const result = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
-    range: `'${SHEET_NAME}'!A:AZ`
+    // start at row 2 because your headers are on row 2 (A2:AZ)
+    range: `'${SHEET_NAME}'!A2:AZ`
   });
 
   const rows = result.data.values || [];
@@ -118,15 +145,14 @@ const parseNumber = (value) => {
 const parseDate = (value) => {
   if (!value) return null;
 
-  // Accept: DD/MM/YYYY, MM/DD/YYYY, DD-MM-YYYY, YYYY-MM-DD, etc.
   const clean = String(value).trim();
   if (!clean) return null;
 
-  // Try simple Date first
+  // First try letting JS parse it (works for many formats)
   const direct = new Date(clean);
   if (!isNaN(direct.getTime())) return direct;
 
-  // Manual fallback
+  // Manual fallback for DD-MM-YYYY, DD/MM/YYYY, YYYY-MM-DD etc.
   const parts = clean.split(/[\/\-\s:]+/);
   if (parts.length < 3) return null;
 
@@ -137,26 +163,22 @@ const parseDate = (value) => {
 
   let day, month, year;
 
-  // If 4-digit year appears first
-  if (c.length === 4 && Number(c) > 1900 && Number(c) < 3000) {
-    // assume a/b/c = DD/MM/YYYY or MM/DD/YYYY, decide by first part
-    if (parseInt(a, 10) > 12) {
-      // DD/MM/YYYY
-      day = parseInt(a, 10);
-      month = parseInt(b, 10);
-    } else {
-      // MM/DD/YYYY (or DD/MM/YYYY for small days, both ok)
-      month = parseInt(a, 10);
-      day = parseInt(b, 10);
-    }
-    year = parseInt(c, 10);
-  } else if (a.length === 4 && Number(a) > 1900) {
+  if (a.length === 4 && Number(a) > 1900) {
     // YYYY-MM-DD
     year = parseInt(a, 10);
     month = parseInt(b, 10);
     day = parseInt(c, 10);
+  } else if (c.length === 4 && Number(c) > 1900 && Number(c) < 3000) {
+    // DD/MM/YYYY or MM/DD/YYYY; guess based on first part
+    if (parseInt(a, 10) > 12) {
+      day = parseInt(a, 10);
+      month = parseInt(b, 10);
+    } else {
+      month = parseInt(a, 10);
+      day = parseInt(b, 10);
+    }
+    year = parseInt(c, 10);
   } else {
-    // Assume DD/MM/YYYY if first > 12, otherwise MM/DD/YYYY
     if (parseInt(a, 10) > 12) {
       day = parseInt(a, 10);
       month = parseInt(b, 10);
@@ -179,8 +201,16 @@ const parseDate = (value) => {
 
 const filterByPeriod = (data, period, dateColumn = COLS.BOOKING_DATE) => {
   const now = new Date();
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  const startOfToday = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate()
+  );
+  const endOfToday = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate() + 1
+  );
 
   const oneWeekAgo = new Date(now);
   oneWeekAgo.setDate(now.getDate() - 7);
@@ -226,16 +256,16 @@ app.get("/health", (req, res) => {
 // 1. Bookings summary (today/this_week/this_month)
 app.get("/bookings/summary", async (req, res) => {
   try {
-    const { period = "this_month" } = req.query; // today | this_week | this_month
+    const { period = "this_month" } = req.query;
     const data = await getRows();
     const filtered = filterByPeriod(data, period, COLS.BOOKING_DATE);
 
     const total = filtered.length;
-    const sold = filtered.filter(
-      (r) => (r[COLS.SOLD_STATUS] || "").toUpperCase().includes("SOLD")
+    const sold = filtered.filter((r) =>
+      (r[COLS.SOLD_STATUS] || "").toUpperCase().includes("SOLD")
     ).length;
-    const unsold = filtered.filter(
-      (r) => (r[COLS.SOLD_STATUS] || "").toUpperCase().includes("UNSOLD")
+    const unsold = filtered.filter((r) =>
+      (r[COLS.SOLD_STATUS] || "").toUpperCase().includes("UNSOLD")
     ).length;
 
     const byCluster = groupCount(filtered, COLS.CLUSTER);
@@ -254,7 +284,7 @@ app.get("/bookings/summary", async (req, res) => {
 });
 
 // 2. List bookings with filters
-//    /bookings?cluster=A&status=SOLD&period=this_month
+//    /bookings?cluster=1&status=SOLD&period=this_month
 app.get("/bookings", async (req, res) => {
   try {
     const { cluster, status, period } = req.query;
@@ -291,7 +321,7 @@ app.get("/bookings", async (req, res) => {
 // 3. Revenue & demand summary
 app.get("/revenue/summary", async (req, res) => {
   try {
-    const { period } = req.query; // optional: today | this_week | this_month
+    const { period } = req.query;
     let data = await getRows();
     if (period) {
       data = filterByPeriod(data, period, COLS.BOOKING_DATE);
@@ -345,7 +375,7 @@ app.get("/loan-status", async (req, res) => {
   }
 });
 
-// 5. Demand details per booking (basic view)
+// 5. Demand details per booking
 app.get("/demand/details", async (req, res) => {
   try {
     const data = await getRows();
@@ -373,7 +403,7 @@ app.get("/demand/details", async (req, res) => {
 });
 
 // 6. Customer lookup by mobile or unit
-//    /customer?mobile=9xxxx OR /customer?unit=101
+//    /customer?mobile=9xxxx OR /customer?unit=G001
 app.get("/customer", async (req, res) => {
   try {
     const { mobile, unit } = req.query;
