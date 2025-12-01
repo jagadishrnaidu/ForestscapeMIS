@@ -319,13 +319,59 @@ app.get("/bookings", async (req, res) => {
 });
 
 // 3. Revenue & demand summary
+// 3. Revenue & demand summary (auto-detect numeric columns)
 app.get("/revenue/summary", async (req, res) => {
   try {
-    const { period } = req.query;
+    const { period } = req.query; // optional: today | this_week | this_month
     let data = await getRows();
+    if (!data || data.length === 0) {
+      return res.json({
+        period: period || "all",
+        total_records: 0,
+        total_sale_price: 0,
+        total_gross_sale_value_without_gst: 0,
+        total_gross_amount_received: 0,
+        total_pending_demand: 0,
+        total_receivables: 0
+      });
+    }
+
     if (period) {
       data = filterByPeriod(data, period, COLS.BOOKING_DATE);
     }
+
+    // 🔍 Auto-detect column names from the first row
+    const sample = data[0];
+    const keys = Object.keys(sample);
+    const norm = (s) =>
+      (s || "").toString().toLowerCase().replace(/\s+/g, " ").trim();
+
+    const findKey = (label) => {
+      const target = norm(label);
+      return (
+        keys.find((k) => norm(k) === target) ||
+        keys.find((k) => norm(k).includes(target))
+      );
+    };
+
+    const salePriceKey =
+      findKey("Sale Price") || findKey(COLS.SALE_PRICE) || COLS.SALE_PRICE;
+    const grossNoGstKey =
+      findKey("Gross Sale Value without GST") ||
+      findKey(COLS.GROSS_SALE_VALUE_NO_GST) ||
+      COLS.GROSS_SALE_VALUE_NO_GST;
+    const receivedKey =
+      findKey("Gross Amount Received") ||
+      findKey(COLS.GROSS_AMOUNT_RECEIVED) ||
+      COLS.GROSS_AMOUNT_RECEIVED;
+    const pendingDemandKey =
+      findKey("Pending Demand") ||
+      findKey(COLS.PENDING_DEMAND) ||
+      COLS.PENDING_DEMAND;
+    const receivablesKey =
+      findKey("Receivables") ||
+      findKey(COLS.RECEIVABLES) ||
+      COLS.RECEIVABLES;
 
     let totalSalePrice = 0;
     let totalGrossValueNoGst = 0;
@@ -334,11 +380,11 @@ app.get("/revenue/summary", async (req, res) => {
     let totalReceivables = 0;
 
     data.forEach((r) => {
-      totalSalePrice += parseNumber(r[COLS.SALE_PRICE]);
-      totalGrossValueNoGst += parseNumber(r[COLS.GROSS_SALE_VALUE_NO_GST]);
-      totalReceived += parseNumber(r[COLS.GROSS_AMOUNT_RECEIVED]);
-      totalPendingDemand += parseNumber(r[COLS.PENDING_DEMAND]);
-      totalReceivables += parseNumber(r[COLS.RECEIVABLES]);
+      totalSalePrice += parseNumber(r[salePriceKey]);
+      totalGrossValueNoGst += parseNumber(r[grossNoGstKey]);
+      totalReceived += parseNumber(r[receivedKey]);
+      totalPendingDemand += parseNumber(r[pendingDemandKey]);
+      totalReceivables += parseNumber(r[receivablesKey]);
     });
 
     res.json({
@@ -355,6 +401,7 @@ app.get("/revenue/summary", async (req, res) => {
     res.status(500).json({ error: "Failed to get revenue summary" });
   }
 });
+
 
 // 4. Loan status breakdown
 app.get("/loan-status", async (req, res) => {
