@@ -1,7 +1,7 @@
 {
-  "name": "village-entry-api",
+  "name": "village-booking-api",
   "version": "1.0.0",
-  "description": "Village Entry Analytics API for Aiikya Village, Sarjapur.",
+  "description": "Booking & payment analytics API for Aiikya Village Google Sheet.",
   "main": "index.js",
   "type": "module",
   "scripts": {
@@ -9,9 +9,9 @@
   },
   "dependencies": {
     "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
     "express": "^4.18.2",
-    "googleapis": "^118.0.0",
-    "dotenv": "^16.4.5"
+    "googleapis": "^118.0.0"
   },
   "engines": {
     "node": ">=18"
